@@ -20,6 +20,7 @@ func (b *Bot) handleGroupCommand(ctx context.Context, chat types.JID, sender typ
 		lower == p+"hidetag" || strings.HasPrefix(lower, p+"hidetag ") || lower == p+"h" || strings.HasPrefix(lower, p+"h ") ||
 		lower == p+"open" || lower == p+"buka" || lower == p+"close" || lower == p+"tutup" ||
 		lower == p+"antidelete" || strings.HasPrefix(lower, p+"antidelete ") || lower == p+"antidel" || strings.HasPrefix(lower, p+"antidel ") ||
+		lower == p+"viewonce" || strings.HasPrefix(lower, p+"viewonce ") || lower == p+"once" || strings.HasPrefix(lower, p+"once ") ||
 		lower == p+"linkgc" || lower == p+"linkgroup" || lower == p+"resetlink" ||
 		lower == p+"kick" || strings.HasPrefix(lower, p+"kick ") || lower == p+"k" || strings.HasPrefix(lower, p+"k ") ||
 		lower == p+"promote" || strings.HasPrefix(lower, p+"promote ") ||
@@ -50,6 +51,8 @@ func (b *Bot) handleGroupCommand(ctx context.Context, chat types.JID, sender typ
 		b.setAnnounce(ctx, chat, true)
 	case lower == p+"antidelete" || strings.HasPrefix(lower, p+"antidelete ") || lower == p+"antidel" || strings.HasPrefix(lower, p+"antidel "):
 		b.handleAntiDeleteCommand(ctx, chat, text)
+	case lower == p+"viewonce" || strings.HasPrefix(lower, p+"viewonce ") || lower == p+"once" || strings.HasPrefix(lower, p+"once "):
+		b.handleViewOnceCommand(ctx, chat, text)
 	case lower == p+"linkgc" || lower == p+"linkgroup":
 		b.groupLink(ctx, chat, false)
 	case lower == p+"resetlink":
@@ -88,6 +91,9 @@ func groupMenuText(p string) string {
 		"│ " + p + "antidelete on\n" +
 		"│ " + p + "antidelete off\n" +
 		"│ " + p + "antidelete status\n" +
+		"│\n" +
+		"│ " + p + "l\n" +
+		"│   reply foto/video sekali lihat\n" +
 		"╰───────────────\n\n" +
 		"_Bot harus admin untuk fitur kontrol grup._"
 }

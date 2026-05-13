@@ -37,6 +37,7 @@ type Bot struct {
 
 	settingsMu        sync.Mutex
 	antiDeleteEnabled map[string]bool
+	viewOnceEnabled   map[string]bool
 
 	stickerMu   sync.Mutex
 	stickerSent map[string]time.Time
@@ -66,7 +67,7 @@ func New(cfg Config) (*Bot, error) {
 		return nil, err
 	}
 	client := whatsmeow.NewClient(device, logger)
-	b := &Bot{cfg: cfg, client: client, startedAt: time.Now(), msgCache: map[string]cachedMessage{}, seenMsgs: map[string]time.Time{}, antiDeleteEnabled: map[string]bool{}, stickerSent: map[string]time.Time{}}
+	b := &Bot{cfg: cfg, client: client, startedAt: time.Now(), msgCache: map[string]cachedMessage{}, seenMsgs: map[string]time.Time{}, antiDeleteEnabled: map[string]bool{}, viewOnceEnabled: map[string]bool{}, stickerSent: map[string]time.Time{}}
 	b.loadSettings()
 	client.AddEventHandler(b.handleEvent)
 	return b, nil
@@ -108,6 +109,10 @@ func (b *Bot) handleEvent(evt any) {
 	switch v := evt.(type) {
 	case *events.Message:
 		go b.handleMessage(context.Background(), v)
+	case *events.UndecryptableMessage:
+		if v.IsUnavailable && v.UnavailableType == events.UnavailableTypeViewOnce {
+			log.Printf("👁️ view once unavailable requested chat=%s sender=%s id=%s", v.Info.Chat.String(), v.Info.Sender.String(), v.Info.ID)
+		}
 	case *events.Connected:
 		log.Println("WA connected ✅")
 	case *events.Disconnected:
@@ -124,6 +129,9 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 	}
 	msg := evt.Message
 	if b.handleAntiDelete(ctx, evt) {
+		return
+	}
+	if b.handleViewOnce(ctx, evt) {
 		return
 	}
 	b.cacheMessage(evt)
@@ -148,6 +156,10 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 		b.sendText(ctx, chat, "Owner: Mas Edi\nBot: WA Bot Go")
 	case lower == p+"runtime" || lower == p+"uptime" || lower == p+"status":
 		b.sendText(ctx, chat, b.statusText())
+	case lower == p+"viewonce" || strings.HasPrefix(lower, p+"viewonce ") || lower == p+"once" || strings.HasPrefix(lower, p+"once "):
+		b.handleViewOnceCommand(ctx, chat, text)
+	case lower == p+"l" || strings.HasPrefix(lower, p+"l "):
+		b.handleLookViewOnce(ctx, evt)
 	case strings.HasPrefix(lower, p+"brat"):
 		payload := strings.TrimSpace(text[len(p+"brat"):])
 		if payload == "" {
@@ -252,6 +264,7 @@ func menuText(p string) string {
 		"│ " + p + "ping\n" +
 		"│ " + p + "runtime\n" +
 		"│ " + p + "owner\n" +
+		"│ " + p + "l - reply foto/video sekali lihat\n" +
 		"╰───────────────\n\n" +
 		"╭─〔 🎬 *DOWNLOADER* 〕\n" +
 		"│ " + p + "d <url>\n" +

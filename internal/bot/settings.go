@@ -11,6 +11,7 @@ import (
 
 type settingsFile struct {
 	AntiDelete map[string]bool `json:"antiDelete"`
+	ViewOnce   map[string]bool `json:"viewOnce"`
 }
 
 func (b *Bot) settingsPath() string {
@@ -33,11 +34,14 @@ func (b *Bot) loadSettings() {
 	if sf.AntiDelete != nil {
 		b.antiDeleteEnabled = sf.AntiDelete
 	}
+	if sf.ViewOnce != nil {
+		b.viewOnceEnabled = sf.ViewOnce
+	}
 }
 
 func (b *Bot) saveSettings() {
 	b.settingsMu.Lock()
-	sf := settingsFile{AntiDelete: b.antiDeleteEnabled}
+	sf := settingsFile{AntiDelete: b.antiDeleteEnabled, ViewOnce: b.viewOnceEnabled}
 	b.settingsMu.Unlock()
 
 	data, err := json.MarshalIndent(sf, "", "  ")
@@ -63,6 +67,19 @@ func (b *Bot) isAntiDeleteEnabled(chat types.JID) bool {
 func (b *Bot) setAntiDelete(chat types.JID, enabled bool) {
 	b.settingsMu.Lock()
 	b.antiDeleteEnabled[chat.String()] = enabled
+	b.settingsMu.Unlock()
+	b.saveSettings()
+}
+
+func (b *Bot) isViewOnceEnabled(chat types.JID) bool {
+	b.settingsMu.Lock()
+	defer b.settingsMu.Unlock()
+	return b.viewOnceEnabled[chat.String()]
+}
+
+func (b *Bot) setViewOnce(chat types.JID, enabled bool) {
+	b.settingsMu.Lock()
+	b.viewOnceEnabled[chat.String()] = enabled
 	b.settingsMu.Unlock()
 	b.saveSettings()
 }
