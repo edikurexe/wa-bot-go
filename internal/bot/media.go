@@ -36,6 +36,13 @@ var (
 	tiktokAnyPattern   = regexp.MustCompile(`(?i)tiktok\.com`)
 )
 
+func systemPython() string {
+	if _, err := os.Stat("/usr/bin/python3"); err == nil {
+		return "/usr/bin/python3"
+	}
+	return "python3"
+}
+
 func firstURL(text string) string {
 	for _, p := range videoPatterns {
 		if m := p.FindString(text); m != "" {
@@ -90,7 +97,7 @@ func makeImageSticker(ctx context.Context, input []byte, cfg Config) ([]byte, er
 	}
 	// Match old Node bot behavior: center square crop -> 512x512 -> rounded corners -> WebP.
 	// Implemented via Pillow helper because ffmpeg rounded-alpha filters are brittle across builds.
-	cmd := exec.CommandContext(ctx, "python3", filepath.Join(cfg.ScriptsDir, "image-sticker.py"), in, out)
+	cmd := exec.CommandContext(ctx, systemPython(), filepath.Join(cfg.ScriptsDir, "image-sticker.py"), in, out)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("image sticker helper: %w: %s", err, string(b))
 	}
@@ -199,7 +206,7 @@ type dlResult struct {
 func downloadVideo(ctx context.Context, cfg Config, rawURL string) ([]byte, string, error) {
 	out := filepath.Join(cfg.TempDir, fmt.Sprintf("vid_%d.mp4", time.Now().UnixNano()))
 	defer cleanup(out)
-	cmd := exec.CommandContext(ctx, "python3", filepath.Join(cfg.ScriptsDir, "ytdl.py"), "download", rawURL, out)
+	cmd := exec.CommandContext(ctx, systemPython(), filepath.Join(cfg.ScriptsDir, "ytdl.py"), "download", rawURL, out)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = nil
@@ -224,7 +231,7 @@ func downloadVideo(ctx context.Context, cfg Config, rawURL string) ([]byte, stri
 func downloadTikTokPhotos(ctx context.Context, cfg Config, rawURL string) ([][]byte, error) {
 	outDir := filepath.Join(cfg.TempDir, fmt.Sprintf("photos_%d", time.Now().UnixNano()))
 	defer os.RemoveAll(outDir)
-	cmd := exec.CommandContext(ctx, "python3", filepath.Join(cfg.ScriptsDir, "tiktok-photo.py"), "download", rawURL, outDir)
+	cmd := exec.CommandContext(ctx, systemPython(), filepath.Join(cfg.ScriptsDir, "tiktok-photo.py"), "download", rawURL, outDir)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = nil
