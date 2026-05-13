@@ -1,0 +1,16 @@
+# Build artifacts
+/wa-bot-go
+*.exe
+*.out
+
+# Runtime/session data
+/data/session.db*
+/data/last-qr.txt
+/data/qr.png
+/data/settings.json
+/tmp/
+
+# OS/editor
+.DS_Store
+*.swp
+.env
