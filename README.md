@@ -83,3 +83,14 @@ WA_SCRIPTS_DIR=/home/edi/wa-bot-go/scripts
 4. Baru buat systemd service untuk `wa-bot-go`.
 
 Jangan jalankan bot lama dan bot Go dengan nomor WhatsApp yang sama terlalu lama bersamaan, karena multi-device/session bisa bentrok atau logout.
+
+## Termux / Android
+
+Lihat panduan install Termux di [TERMUX.md](TERMUX.md).
+
+Quick install:
+
+```bash
+pkg install -y curl
+curl -L https://raw.githubusercontent.com/edikurexe/wa-bot-go/main/install-termux.sh | bash
+```
