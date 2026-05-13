@@ -14,3 +14,7 @@
 .DS_Store
 *.swp
 .env
+
+# Python cache
+__pycache__/
+*.py[cod]
