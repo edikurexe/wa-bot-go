@@ -8,6 +8,7 @@
 /data/last-qr.txt
 /data/qr.png
 /data/settings.json
+/data/warnings.json
 /tmp/
 
 # OS/editor
