@@ -230,7 +230,8 @@ def build_compress_args(input_path, temp_out, max_size, duration, max_width, aud
     target_total_k = int((max_size * 8 / duration) / 1000 * budget_ratio)
     # Allow very low bitrate for long clips so ffmpeg still has a chance to fit 16 MB.
     video_k = max(120, target_total_k - audio_k)
-    scale = f'scale=trunc(min({max_width},iw)/2)*2:-2'
+    # Escape comma inside min() because ffmpeg filtergraphs use comma as filter separator.
+    scale = f'scale=trunc(min({max_width}\\,iw)/2)*2:-2'
     return [
         'ffmpeg', '-y', '-i', input_path,
         '-vf', scale,
