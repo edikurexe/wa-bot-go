@@ -159,48 +159,86 @@ def ensure_h264(input_path, desired_output):
         return desired_output
 
 def ensure_max_size(input_path, desired_output, max_size):
-    """Compress to fit max_size when possible."""
+    """Compress to H.264/AAC MP4 to fit max_size when possible."""
     try:
-        if not os.path.exists(input_path) or os.path.getsize(input_path) <= max_size:
+        if not os.path.exists(input_path):
+            return input_path
+        if os.path.getsize(input_path) <= max_size:
             if input_path != desired_output and os.path.exists(input_path):
                 os.rename(input_path, desired_output)
             return desired_output
 
-        # Get duration for target bitrate calculation.
-        probe = subprocess.run(
-            ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
-             '-of', 'default=noprint_wrappers=1:nokey=1', input_path],
-            capture_output=True, text=True, timeout=10
-        )
-        duration = float((probe.stdout or '0').strip() or 0)
+        duration = probe_duration(input_path)
         if duration <= 0:
-            return input_path
+            raise RuntimeError('durasi video tidak terbaca untuk kompres')
 
-        # Leave some overhead for container/audio. Min video bitrate 250k to avoid trash output.
-        target_total_k = int((max_size * 8 / duration) / 1000 * 0.88)
-        audio_k = 64
-        video_k = max(250, target_total_k - audio_k)
-        temp_out = desired_output + '.small.mp4'
-        subprocess.run(
-            ['ffmpeg', '-y', '-i', input_path,
-             '-vf', 'scale=trunc(min(720,iw)/2)*2:-2',
-             '-c:v', 'libx264', '-preset', 'veryfast', '-b:v', f'{video_k}k', '-maxrate', f'{video_k}k', '-bufsize', f'{video_k*2}k',
-             '-c:a', 'aac', '-b:a', f'{audio_k}k',
-             '-movflags', '+faststart', temp_out],
-            capture_output=True, timeout=180
-        )
-        if os.path.exists(temp_out) and os.path.getsize(temp_out) > 0:
-            if os.path.getsize(temp_out) <= max_size or os.path.getsize(temp_out) < os.path.getsize(input_path):
+        candidates = []
+        # First pass: keep decent quality, calculate bitrate for target size.
+        candidates.append(build_compress_args(input_path, desired_output + '.small.mp4', max_size, duration, 720, 64, 0.86, 'veryfast'))
+        # Second pass: more aggressive for long/heavy videos.
+        candidates.append(build_compress_args(input_path, desired_output + '.tiny.mp4', max_size, duration, 540, 48, 0.80, 'veryfast'))
+        # Last resort: 480p and lower audio budget.
+        candidates.append(build_compress_args(input_path, desired_output + '.mini.mp4', max_size, duration, 480, 40, 0.76, 'veryfast'))
+
+        best = None
+        for args, temp_out in candidates:
+            if os.path.exists(temp_out):
+                os.remove(temp_out)
+            subprocess.run(args, capture_output=True, timeout=240)
+            if not os.path.exists(temp_out) or os.path.getsize(temp_out) <= 0:
+                continue
+            size = os.path.getsize(temp_out)
+            if best is None or size < os.path.getsize(best):
+                if best and os.path.exists(best):
+                    os.remove(best)
+                best = temp_out
+            else:
+                os.remove(temp_out)
+            if size <= max_size:
+                best = temp_out
+                break
+
+        if best and os.path.exists(best):
+            if os.path.getsize(best) <= max_size:
                 if input_path != desired_output and os.path.exists(input_path):
                     os.remove(input_path)
                 if os.path.exists(desired_output):
                     os.remove(desired_output)
-                os.rename(temp_out, desired_output)
+                os.rename(best, desired_output)
                 return desired_output
-            os.remove(temp_out)
-        return input_path
-    except Exception:
-        return input_path
+            size_mb = os.path.getsize(best) / 1024 / 1024
+            os.remove(best)
+            raise RuntimeError(f'video masih terlalu besar setelah kompres ({size_mb:.1f} MB), max {max_size/1024/1024:.0f} MB')
+
+        raise RuntimeError('kompres video gagal')
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f'kompres video gagal: {e}')
+
+
+def probe_duration(path):
+    probe = subprocess.run(
+        ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+         '-of', 'default=noprint_wrappers=1:nokey=1', path],
+        capture_output=True, text=True, timeout=10
+    )
+    return float((probe.stdout or '0').strip() or 0)
+
+
+def build_compress_args(input_path, temp_out, max_size, duration, max_width, audio_k, budget_ratio, preset):
+    target_total_k = int((max_size * 8 / duration) / 1000 * budget_ratio)
+    # Allow very low bitrate for long clips so ffmpeg still has a chance to fit 16 MB.
+    video_k = max(120, target_total_k - audio_k)
+    scale = f'scale=trunc(min({max_width},iw)/2)*2:-2'
+    return [
+        'ffmpeg', '-y', '-i', input_path,
+        '-vf', scale,
+        '-c:v', 'libx264', '-preset', preset,
+        '-b:v', f'{video_k}k', '-maxrate', f'{video_k}k', '-bufsize', f'{max(video_k*2, 240)}k',
+        '-c:a', 'aac', '-b:a', f'{audio_k}k',
+        '-movflags', '+faststart', temp_out,
+    ], temp_out
 
 def get_title(url):
     opts = {'quiet': True, 'no_warnings': True, 'noplaylist': True, 'geo_bypass': True}

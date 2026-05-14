@@ -13,12 +13,18 @@ import (
 
 var phoneMentionRE = regexp.MustCompile(`\d{6,}`)
 
-func (b *Bot) handleGroupCommand(ctx context.Context, chat types.JID, sender types.JID, msg *proto.Message, text, lower string) bool {
+func (b *Bot) handleGroupCommand(ctx context.Context, chat types.JID, sender types.JID, msg *proto.Message, text, lower, pushName string) bool {
 	p := b.cfg.Prefix
 	isGroupCommand := lower == p+"group" || lower == p+"groupmenu" ||
 		lower == p+"tagall" || strings.HasPrefix(lower, p+"tagall ") ||
 		lower == p+"hidetag" || strings.HasPrefix(lower, p+"hidetag ") || lower == p+"h" || strings.HasPrefix(lower, p+"h ") ||
-		lower == p+"open" || lower == p+"buka" || lower == p+"close" || lower == p+"tutup" ||
+		lower == p+"open" || strings.HasPrefix(lower, p+"open ") || lower == p+"buka" || strings.HasPrefix(lower, p+"buka ") ||
+		lower == p+"close" || strings.HasPrefix(lower, p+"close ") || lower == p+"tutup" || strings.HasPrefix(lower, p+"tutup ") ||
+		lower == p+"openchat" || strings.HasPrefix(lower, p+"openchat ") || lower == p+"oc" || strings.HasPrefix(lower, p+"oc ") ||
+		lower == p+"closechat" || strings.HasPrefix(lower, p+"closechat ") || lower == p+"cc" || strings.HasPrefix(lower, p+"cc ") ||
+		lower == p+"absen" || strings.HasPrefix(lower, p+"absen ") ||
+		lower == p+"w" || strings.HasPrefix(lower, p+"w ") || lower == p+"dw" || strings.HasPrefix(lower, p+"dw ") ||
+		lower == p+"dwall" || strings.HasPrefix(lower, p+"dwall ") || lower == p+"listwarn" ||
 		lower == p+"antidelete" || strings.HasPrefix(lower, p+"antidelete ") || lower == p+"antidel" || strings.HasPrefix(lower, p+"antidel ") ||
 		lower == p+"viewonce" || strings.HasPrefix(lower, p+"viewonce ") || lower == p+"once" || strings.HasPrefix(lower, p+"once ") ||
 		lower == p+"linkgc" || lower == p+"linkgroup" || lower == p+"resetlink" ||
@@ -45,10 +51,24 @@ func (b *Bot) handleGroupCommand(ctx context.Context, chat types.JID, sender typ
 			note = strings.TrimSpace(text[len(p+"h"):])
 		}
 		b.tagAll(ctx, chat, note, true)
-	case lower == p+"open" || lower == p+"buka":
-		b.setAnnounce(ctx, chat, false)
-	case lower == p+"close" || lower == p+"tutup":
-		b.setAnnounce(ctx, chat, true)
+	case lower == p+"open" || strings.HasPrefix(lower, p+"open ") || lower == p+"buka" || strings.HasPrefix(lower, p+"buka ") || lower == p+"openchat" || strings.HasPrefix(lower, p+"openchat ") || lower == p+"oc" || strings.HasPrefix(lower, p+"oc "):
+		if _, ok := b.requireGroupAdmin(ctx, chat, sender); ok {
+			b.setAnnounceWithTimer(ctx, chat, text, false)
+		}
+	case lower == p+"close" || strings.HasPrefix(lower, p+"close ") || lower == p+"tutup" || strings.HasPrefix(lower, p+"tutup ") || lower == p+"closechat" || strings.HasPrefix(lower, p+"closechat ") || lower == p+"cc" || strings.HasPrefix(lower, p+"cc "):
+		if _, ok := b.requireGroupAdmin(ctx, chat, sender); ok {
+			b.setAnnounceWithTimer(ctx, chat, text, true)
+		}
+	case lower == p+"absen" || strings.HasPrefix(lower, p+"absen "):
+		b.handleAbsen(ctx, chat, sender, text, pushName)
+	case lower == p+"w" || strings.HasPrefix(lower, p+"w "):
+		b.handleWarn(ctx, chat, sender, msg, text, "w")
+	case lower == p+"dw" || strings.HasPrefix(lower, p+"dw "):
+		b.handleDeleteWarn(ctx, chat, sender, msg, text, false)
+	case lower == p+"dwall" || strings.HasPrefix(lower, p+"dwall "):
+		b.handleDeleteWarn(ctx, chat, sender, msg, text, true)
+	case lower == p+"listwarn":
+		b.handleListWarn(ctx, chat)
 	case lower == p+"antidelete" || strings.HasPrefix(lower, p+"antidelete ") || lower == p+"antidel" || strings.HasPrefix(lower, p+"antidel "):
 		b.handleAntiDeleteCommand(ctx, chat, text)
 	case lower == p+"viewonce" || strings.HasPrefix(lower, p+"viewonce ") || lower == p+"once" || strings.HasPrefix(lower, p+"once "):
@@ -79,7 +99,16 @@ func groupMenuText(p string) string {
 		"│   mention silent\n" +
 		"│\n" +
 		"│ " + p + "open / " + p + "close\n" +
+		"│ " + p + "oc / " + p + "cc [durasi]\n" +
 		"│   buka/tutup grup\n" +
+		"│\n" +
+		"│ " + p + "absen start\n" +
+		"│ " + p + "absen cek / reset\n" +
+		"│\n" +
+		"│ " + p + "w @user\n" +
+		"│ " + p + "dw @user\n" +
+		"│ " + p + "dwall @user\n" +
+		"│ " + p + "listwarn\n" +
 		"│\n" +
 		"│ " + p + "kick @user\n" +
 		"│ " + p + "promote @user\n" +

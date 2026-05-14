@@ -89,28 +89,32 @@ func restoreOriginalURL(matched string) string {
 	return "https://vm.tiktok.com" + from
 }
 
-func makeImageSticker(ctx context.Context, input []byte, cfg Config) ([]byte, error) {
+func makeImageSticker(ctx context.Context, input []byte, cfg Config, mode string) ([]byte, error) {
 	in, out := tempPair(cfg.TempDir, "img", ".bin", ".webp")
 	defer cleanup(in, out)
 	if err := os.WriteFile(in, input, 0600); err != nil {
 		return nil, err
 	}
-	// Match old Node bot behavior: center square crop -> 512x512 -> rounded corners -> WebP.
-	// Implemented via Pillow helper because ffmpeg rounded-alpha filters are brittle across builds.
-	cmd := exec.CommandContext(ctx, systemPython(), filepath.Join(cfg.ScriptsDir, "image-sticker.py"), in, out)
+	if mode != "original" {
+		mode = "crop"
+	}
+	cmd := exec.CommandContext(ctx, systemPython(), filepath.Join(cfg.ScriptsDir, "image-sticker.py"), in, out, mode)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("image sticker helper: %w: %s", err, string(b))
 	}
 	return os.ReadFile(out)
 }
 
-func makeVideoSticker(ctx context.Context, input []byte, cfg Config) ([]byte, error) {
+func makeVideoSticker(ctx context.Context, input []byte, cfg Config, mode string) ([]byte, error) {
 	in, out := tempPair(cfg.TempDir, "vid", ".mp4", ".webp")
 	defer cleanup(in, out)
 	if err := os.WriteFile(in, input, 0600); err != nil {
 		return nil, err
 	}
 	vf := "crop='min(iw,ih)':'min(iw,ih)',scale=512:512,fps=12"
+	if mode == "original" {
+		vf = "scale='if(gt(a,1),512,-2)':'if(gt(a,1),-2,512)',pad=512:512:(ow-iw)/2:(oh-ih)/2:color=0x00000000,fps=12"
+	}
 	cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-i", in, "-t", fmt.Sprint(cfg.MaxStickerVideoSec), "-vf", vf, "-c:v", "libwebp_anim", "-loop", "0", "-q:v", "80", "-compression_level", "0", "-an", out)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("ffmpeg video sticker: %w: %s", err, string(b))
@@ -153,6 +157,29 @@ func makeTextSticker(ctx context.Context, text, style string, cfg Config) ([]byt
 	cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-i", in, "-vcodec", "libwebp", "-lossless", "0", "-q:v", "85", out)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("ffmpeg text sticker: %w: %s", err, string(b))
+	}
+	return os.ReadFile(out)
+}
+
+func makeMemeSticker(ctx context.Context, input []byte, top, bottom string, cfg Config) ([]byte, error) {
+	in, out := tempPair(cfg.TempDir, "meme", ".bin", ".webp")
+	defer cleanup(in, out)
+	if err := os.WriteFile(in, input, 0600); err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, systemPython(), filepath.Join(cfg.ScriptsDir, "meme-sticker.py"), in, out, top, bottom)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("meme sticker helper: %w: %s", err, string(b))
+	}
+	return os.ReadFile(out)
+}
+
+func makeBratVideoSticker(ctx context.Context, text string, cfg Config) ([]byte, error) {
+	_, out := tempPair(cfg.TempDir, "bratvideo", ".txt", ".webp")
+	defer cleanup(out)
+	cmd := exec.CommandContext(ctx, systemPython(), filepath.Join(cfg.ScriptsDir, "bratvideo-sticker.py"), out, text)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("bratvideo helper: %w: %s", err, string(b))
 	}
 	return os.ReadFile(out)
 }

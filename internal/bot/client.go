@@ -38,6 +38,11 @@ type Bot struct {
 	settingsMu        sync.Mutex
 	antiDeleteEnabled map[string]bool
 	viewOnceEnabled   map[string]bool
+	stickerMode       map[string]string
+
+	absenStore sync.Map
+	warningMu  sync.Mutex
+	warnings   map[string]map[string]*WarningEntry
 
 	stickerMu   sync.Mutex
 	stickerSent map[string]time.Time
@@ -67,8 +72,9 @@ func New(cfg Config) (*Bot, error) {
 		return nil, err
 	}
 	client := whatsmeow.NewClient(device, logger)
-	b := &Bot{cfg: cfg, client: client, startedAt: time.Now(), msgCache: map[string]cachedMessage{}, seenMsgs: map[string]time.Time{}, antiDeleteEnabled: map[string]bool{}, viewOnceEnabled: map[string]bool{}, stickerSent: map[string]time.Time{}}
+	b := &Bot{cfg: cfg, client: client, startedAt: time.Now(), msgCache: map[string]cachedMessage{}, seenMsgs: map[string]time.Time{}, antiDeleteEnabled: map[string]bool{}, viewOnceEnabled: map[string]bool{}, stickerMode: map[string]string{}, warnings: map[string]map[string]*WarningEntry{}, stickerSent: map[string]time.Time{}}
 	b.loadSettings()
+	b.loadWarnings()
 	client.AddEventHandler(b.handleEvent)
 	return b, nil
 }
@@ -144,7 +150,7 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 	}
 
 	p := b.cfg.Prefix
-	if b.handleGroupCommand(ctx, chat, evt.Info.Sender, msg, text, lower) {
+	if b.handleGroupCommand(ctx, chat, evt.Info.Sender, msg, text, lower, evt.Info.PushName) {
 		return
 	}
 	switch {
@@ -160,12 +166,21 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 		b.handleViewOnceCommand(ctx, chat, text)
 	case lower == p+"l" || strings.HasPrefix(lower, p+"l "):
 		b.handleLookViewOnce(ctx, evt)
+	case strings.HasPrefix(lower, p+"bratvideo"):
+		payload := strings.TrimSpace(text[len(p+"bratvideo"):])
+		if payload == "" {
+			payload = quotedText(msg)
+		}
+		b.handleBratVideoSticker(ctx, evt, payload)
 	case strings.HasPrefix(lower, p+"brat"):
 		payload := strings.TrimSpace(text[len(p+"brat"):])
 		if payload == "" {
 			payload = quotedText(msg)
 		}
 		b.handleTextSticker(ctx, evt, payload, "brat")
+	case lower == p+"ts" || strings.HasPrefix(lower, p+"ts "):
+		payload := strings.TrimSpace(text[len(p+"ts"):])
+		b.handleMemeSticker(ctx, evt, payload)
 	case strings.HasPrefix(lower, p+"qc"):
 		payload := strings.TrimSpace(text[len(p+"qc"):])
 		if payload == "" {
@@ -180,7 +195,9 @@ func (b *Bot) handleMessage(ctx context.Context, evt *events.Message) {
 		if b.reserveStickerSend(evt) {
 			b.handleSticker(ctx, evt)
 		}
-	case lower == p+"toimg" || lower == p+"toimage":
+	case lower == p+"stickermode" || strings.HasPrefix(lower, p+"stickermode ") || lower == p+"smode" || strings.HasPrefix(lower, p+"smode "):
+		b.handleStickerModeCommand(ctx, chat, text)
+	case lower == p+"toimg" || lower == p+"toimage" || lower == p+"ti":
 		b.handleToImage(ctx, evt)
 	case isDownloadCommandNoURL(lower, p):
 		b.sendText(ctx, chat, downloadUsage(p, strings.TrimPrefix(lower, p)))
@@ -232,7 +249,7 @@ func (b *Bot) reserveStickerSend(evt *events.Message) bool {
 	if evt == nil || evt.Info.ID == "" {
 		return true
 	}
-	msgKey := evt.Info.Chat.String() + "|" + evt.Info.Sender.String() + "|" + evt.Info.ID
+	msgKey := stickerEventKey(evt, "cmd")
 	cooldownKey := evt.Info.Chat.String() + "|" + evt.Info.Sender.String() + "|sticker-cooldown"
 	now := time.Now()
 	b.stickerMu.Lock()
@@ -253,6 +270,31 @@ func (b *Bot) reserveStickerSend(evt *events.Message) bool {
 		}
 	}
 	return true
+}
+
+func (b *Bot) reserveStickerDelivery(evt *events.Message) bool {
+	if evt == nil || evt.Info.ID == "" {
+		return true
+	}
+	key := stickerEventKey(evt, "send")
+	now := time.Now()
+	b.stickerMu.Lock()
+	defer b.stickerMu.Unlock()
+	if _, ok := b.stickerSent[key]; ok {
+		log.Println("skip duplicate sticker delivery same msg:", key)
+		return false
+	}
+	b.stickerSent[key] = now
+	for k, t := range b.stickerSent {
+		if now.Sub(t) > 30*time.Minute {
+			delete(b.stickerSent, k)
+		}
+	}
+	return true
+}
+
+func stickerEventKey(evt *events.Message, scope string) string {
+	return scope + "|" + evt.Info.Chat.String() + "|" + evt.Info.Sender.String() + "|" + evt.Info.ID
 }
 
 func menuText(p string) string {
@@ -276,8 +318,11 @@ func menuText(p string) string {
 		"╰───────────────\n\n" +
 		"╭─〔 🖼️ *STICKER* 〕\n" +
 		"│ " + p + "s\n" +
-		"│ " + p + "toimg\n" +
+		"│ " + p + "smode original/crop\n" +
+		"│ " + p + "toimg / " + p + "ti\n" +
+		"│ " + p + "ts atas|bawah\n" +
 		"│ " + p + "brat <teks>\n" +
+		"│ " + p + "bratvideo <teks>\n" +
 		"│ " + p + "qc <teks>\n" +
 		"╰───────────────\n\n" +
 		"╭─〔 🛡️ *GROUP* 〕\n" +
@@ -285,6 +330,10 @@ func menuText(p string) string {
 		"│ " + p + "tagall <teks>\n" +
 		"│ " + p + "hidetag <teks>\n" +
 		"│ " + p + "open / " + p + "close\n" +
+		"│ " + p + "oc / " + p + "cc [durasi]\n" +
+		"│ " + p + "absen start/cek/reset\n" +
+		"│ " + p + "w / " + p + "dw / " + p + "dwall\n" +
+		"│ " + p + "listwarn\n" +
 		"│ " + p + "kick @user\n" +
 		"│ " + p + "promote / " + p + "demote\n" +
 		"│ " + p + "antidelete on/off\n" +
@@ -383,11 +432,12 @@ func (b *Bot) handleSticker(ctx context.Context, evt *events.Message) {
 		return
 	}
 
+	mode := b.getStickerMode(chat)
 	var webp []byte
 	if kind == "video" {
-		webp, err = makeVideoSticker(ctx, data, b.cfg)
+		webp, err = makeVideoSticker(ctx, data, b.cfg, mode)
 	} else {
-		webp, err = makeImageSticker(ctx, data, b.cfg)
+		webp, err = makeImageSticker(ctx, data, b.cfg, mode)
 	}
 	if err != nil {
 		log.Println("sticker error:", err)
@@ -400,9 +450,114 @@ func (b *Bot) handleSticker(ctx context.Context, evt *events.Message) {
 	}
 
 	log.Printf("sending sticker for msg=%s chat=%s sender=%s", evt.Info.ID, chat.String(), evt.Info.Sender.String())
-	if err := b.sendStickerWebP(ctx, chat, webp, kind == "video"); err != nil {
+	if err := b.sendStickerWebPForEvent(ctx, evt, webp, kind == "video"); err != nil {
 		log.Println("send sticker error:", err)
 		b.sendText(ctx, chat, "❌ Gagal kirim sticker.")
+		return
+	}
+	b.react(ctx, evt, "✅")
+}
+
+func (b *Bot) handleStickerModeCommand(ctx context.Context, chat types.JID, text string) {
+	fields := strings.Fields(text)
+	if len(fields) < 2 || strings.EqualFold(fields[1], "status") {
+		mode := b.getStickerMode(chat)
+		desc := "auto-crop kotak + rounded"
+		if mode == "original" {
+			desc = "original ratio/fit, tanpa crop"
+		}
+		b.sendText(ctx, chat, "Mode stiker: *"+mode+"*\n"+desc+"\n\nUbah:\n"+b.cfg.Prefix+"smode original\n"+b.cfg.Prefix+"smode crop")
+		return
+	}
+	if !b.setStickerMode(chat, fields[1]) {
+		b.sendText(ctx, chat, "Mode tidak dikenal. Pilih: original atau crop")
+		return
+	}
+	mode := b.getStickerMode(chat)
+	if mode == "original" {
+		b.sendText(ctx, chat, "✅ Mode stiker: original ratio/fit, tanpa crop.")
+	} else {
+		b.sendText(ctx, chat, "✅ Mode stiker: auto-crop kotak + rounded.")
+	}
+}
+
+func (b *Bot) handleMemeSticker(ctx context.Context, evt *events.Message, text string) {
+	chat := evt.Info.Chat
+	text = strings.TrimSpace(text)
+	if text == "" {
+		b.sendText(ctx, chat, "Reply gambar/stiker + "+b.cfg.Prefix+"ts teks\nPisah atas/bawah pakai | contoh: "+b.cfg.Prefix+"ts atas|bawah")
+		return
+	}
+	parts := strings.SplitN(text, "|", 2)
+	top := strings.TrimSpace(parts[0])
+	bottom := ""
+	if len(parts) == 2 {
+		bottom = strings.TrimSpace(parts[1])
+	}
+	if top == "" && bottom == "" {
+		b.sendText(ctx, chat, "Teks kosong.")
+		return
+	}
+	if len([]rune(top))+len([]rune(bottom)) > 140 {
+		b.sendText(ctx, chat, "Teks terlalu panjang, max ±140 karakter.")
+		return
+	}
+	mediaMsg, kind := downloadableFromMessage(evt.Message)
+	if mediaMsg == nil || (kind != "image" && kind != "sticker") {
+		b.sendText(ctx, chat, "Reply gambar/stiker + "+b.cfg.Prefix+"ts teks")
+		return
+	}
+	b.react(ctx, evt, "⏳")
+	data, err := b.client.Download(ctx, mediaMsg)
+	if err != nil {
+		b.sendText(ctx, chat, "❌ Gagal download media.")
+		b.react(ctx, evt, "❌")
+		return
+	}
+	webp, err := makeMemeSticker(ctx, data, top, bottom, b.cfg)
+	if err != nil {
+		log.Println("meme sticker error:", err)
+		b.sendText(ctx, chat, "❌ Gagal membuat meme sticker.")
+		b.react(ctx, evt, "❌")
+		return
+	}
+	if err := b.sendStickerWebPForEvent(ctx, evt, webp, false); err != nil {
+		log.Println("send meme sticker error:", err)
+		b.sendText(ctx, chat, "❌ Gagal kirim sticker.")
+		b.react(ctx, evt, "❌")
+		return
+	}
+	b.react(ctx, evt, "✅")
+}
+
+func (b *Bot) handleBratVideoSticker(ctx context.Context, evt *events.Message, text string) {
+	chat := evt.Info.Chat
+	text = strings.TrimSpace(text)
+	if text == "" {
+		b.sendText(ctx, chat, "Kirim teks. Contoh: "+b.cfg.Prefix+"bratvideo halo mas edi")
+		return
+	}
+	if len([]rune(text)) > 80 {
+		b.sendText(ctx, chat, "Teks terlalu panjang, max ±80 karakter.")
+		return
+	}
+	b.react(ctx, evt, "⏳")
+	webp, err := makeBratVideoSticker(ctx, text, b.cfg)
+	if err != nil {
+		log.Println("bratvideo sticker error:", err)
+		b.sendText(ctx, chat, "❌ Gagal membuat bratvideo sticker.")
+		b.react(ctx, evt, "❌")
+		return
+	}
+	if len(webp) > 1024*1024 {
+		b.sendText(ctx, chat, "❌ Sticker terlalu besar. Teksnya pendekin sedikit.")
+		b.react(ctx, evt, "❌")
+		return
+	}
+	if err := b.sendStickerWebPForEvent(ctx, evt, webp, true); err != nil {
+		log.Println("send bratvideo sticker error:", err)
+		b.sendText(ctx, chat, "❌ Gagal kirim sticker.")
+		b.react(ctx, evt, "❌")
 		return
 	}
 	b.react(ctx, evt, "✅")
@@ -431,7 +586,7 @@ func (b *Bot) handleTextSticker(ctx context.Context, evt *events.Message, text, 
 		b.react(ctx, evt, "❌")
 		return
 	}
-	if err := b.sendStickerWebP(ctx, chat, webp, false); err != nil {
+	if err := b.sendStickerWebPForEvent(ctx, evt, webp, false); err != nil {
 		log.Println("send text sticker error:", err)
 		b.sendText(ctx, chat, "❌ Gagal kirim sticker.")
 		b.react(ctx, evt, "❌")
@@ -517,6 +672,13 @@ func (b *Bot) sendStickerWebP(ctx context.Context, chat types.JID, webp []byte, 
 	}}
 	_, err = b.client.SendMessage(ctx, chat, msg)
 	return err
+}
+
+func (b *Bot) sendStickerWebPForEvent(ctx context.Context, evt *events.Message, webp []byte, animated bool) error {
+	if !b.reserveStickerDelivery(evt) {
+		return nil
+	}
+	return b.sendStickerWebP(ctx, evt.Info.Chat, webp, animated)
 }
 
 func (b *Bot) sendMedia(ctx context.Context, chat types.JID, data []byte, mimetype, caption string) {
